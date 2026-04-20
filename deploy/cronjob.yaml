@@ -168,25 +168,25 @@ spec:
                 # - name: SCAN_TIMEOUT
                 #   value: "15m"
 
-                # OPTIONAL BUT RECOMMENDED: Upstream-registry → Zot-local-path
-                # mapping. Format: "host1=dest1,host2=dest2,..."
-                # (values have NO leading slash).
+                # REQUIRED WHEN Zot uses destination-namespaced sync registries:
+                # Upstream-registry → Zot-local-path mapping.
+                # Format: "host1=dest1,host2=dest2,..." (values have NO leading slash).
                 #
                 # When set, the warmer routes each image through the mapped
                 # destination path in Zot. Images from registries NOT in the
-                # map are SKIPPED (visible in run-complete's
-                # skipped_no_mapping counter), preventing silent failures.
+                # map are SKIPPED (visible in run-complete's skipped_no_mapping
+                # counter), preventing silent failures.
                 #
-                # When unset, the warmer sends bare repository paths
-                # (flatten layout) — only correct when Zot sync registries
-                # have NO destination set.
+                # When unset, the warmer sends bare repository paths (flatten
+                # layout) — only correct when Zot sync registries have NO
+                # destination set.
                 #
                 # CRITICAL: this must match exactly:
                 #   (a) destination values in Zot sync.registries[].content[]
                 #   (b) endpoint paths in /etc/rancher/k3s/registries.yaml
                 # All three surfaces must agree per upstream registry.
-                # - name: ZOT_REGISTRY_MAP
-                #   value: "docker.io=docker-images,ghcr.io=ghcr-images,registry.k8s.io=k8s-images,quay.io=quay-images,gcr.io=gcr-images,code.forgejo.org=forgejo-images,lscr.io=lscr-images"
+                - name: ZOT_REGISTRY_MAP
+                  value: "docker.io=docker-images,ghcr.io=ghcr-images,registry.k8s.io=k8s-images,quay.io=quay-images,gcr.io=gcr-images,code.forgejo.org=forgejo-images,lscr.io=lscr-images"
 
                 # OPTIONAL: Comma-separated namespace allowlist.
                 # Default: all namespaces scanned.
