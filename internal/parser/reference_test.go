@@ -59,7 +59,12 @@ func TestParse(t *testing.T) {
 		// --- Error cases ---
 		{"empty", "", true, "", "", "", "", "", false, false},
 		{"whitespace", "   ", true, "", "", "", "", "", false, false},
-		{"uppercase", "UPPERCASE/repo", true, "", "", "", "", "", false, false},
+		// Uppercase must appear in the PATH to trigger ErrNameContainsUppercase.
+		// "UPPERCASE/repo" would actually parse (UPPERCASE treated as the
+		// registry domain since it has uppercase → triggers the domain branch
+		// in splitDockerDomain); the path "repo" is valid lowercase.
+		// "foo/BAR" forces the path branch and fails on the uppercase check.
+		{"uppercase-in-path", "foo/BAR", true, "", "", "", "", "", false, false},
 		{"bad-colon", "repo:tag:tag", true, "", "", "", "", "", false, false},
 		{"missing-name", ":tag", true, "", "", "", "", "", false, false},
 		{"bad-digest", "repo@notadigest", true, "", "", "", "", "", false, false},

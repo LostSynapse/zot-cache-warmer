@@ -252,20 +252,32 @@ func (w *Warmer) WarmMultiArch(ctx context.Context, ref string) error {
 }
 
 // strippedBase returns the repo portion of ref without any :tag or @digest
-// suffix. It guards against false positives on ':' in host:port by requiring
-// that nothing after the colon contains a '/'.
+// suffix. The two-pass approach ensures a digest's internal colon (e.g. the
+// ':' in "sha256:abc...") is never mistaken for a tag separator.
 func strippedBase(ref string) string {
+	// Pass 1: strip @digest. '@' appears only as the digest separator in OCI
+	// refs — it's not a valid character in hostnames, paths, or tags.
+	at := -1
 	for i := len(ref) - 1; i >= 0; i-- {
 		if ref[i] == '@' {
-			return ref[:i]
+			at = i
+			break
 		}
+	}
+	if at >= 0 {
+		ref = ref[:at]
+	}
+	// Pass 2: strip :tag. A ':' between the last '/' and end-of-string is a
+	// tag; a ':' before the last '/' is part of host:port.
+	lastSlash := -1
+	for i := len(ref) - 1; i >= 0; i-- {
+		if ref[i] == '/' {
+			lastSlash = i
+			break
+		}
+	}
+	for i := len(ref) - 1; i > lastSlash; i-- {
 		if ref[i] == ':' {
-			rest := ref[i+1:]
-			for _, c := range rest {
-				if c == '/' {
-					return ref
-				}
-			}
 			return ref[:i]
 		}
 	}
