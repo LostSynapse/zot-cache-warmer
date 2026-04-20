@@ -1,0 +1,197 @@
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: zot-cache-warmer
+  # CHANGEME: Target namespace for deployment.
+  # Must match the ServiceAccount namespace in rbac.yaml.
+  # Examples: zot-system, zot, infra, registry
+  namespace: zot
+  labels:
+    app.kubernetes.io/name: zot-cache-warmer
+    app.kubernetes.io/component: cache-warmer
+spec:
+  # CHANGEME: Adjust schedule as needed (default: hourly on the hour).
+  # Format: minute hour day-of-month month day-of-week (UTC in stock Kubernetes;
+  # set .spec.timeZone on Kubernetes 1.27+ to use a local time zone).
+  # Examples:
+  #   "0 * * * *"      - Every hour at minute 0 (default)
+  #   "*/30 * * * *"   - Every 30 minutes
+  #   "0 */6 * * *"    - Every 6 hours
+  #   "0 3 * * *"      - Daily at 03:00 UTC
+  schedule: "0 * * * *"
+
+  # Don't run a new Job while a previous one is still running. Sequential
+  # processing plus the scan timeout makes concurrent runs unnecessary and
+  # potentially harmful to upstream rate limits.
+  concurrencyPolicy: Forbid
+
+  # If the controller misses a scheduled run (e.g., apiserver outage), it will
+  # only attempt to start it if < startingDeadlineSeconds have elapsed.
+  startingDeadlineSeconds: 300
+
+  # Retain a few runs of history for kubectl-based debugging.
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+
+  jobTemplate:
+    spec:
+      # Hard ceiling on a single run. Must be greater than SCAN_TIMEOUT env var.
+      activeDeadlineSeconds: 600
+
+      # OnFailure restart is pointless here because the app always exits 0 on
+      # recoverable errors (the scheduled next run is the "retry"); it only
+      # exits non-zero on fatal config or auth errors that a restart won't fix.
+      backoffLimit: 1
+
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: zot-cache-warmer
+            app.kubernetes.io/component: cache-warmer
+        spec:
+          serviceAccountName: zot-cache-warmer
+          restartPolicy: OnFailure
+
+          # Pod-level security context: meets Pod Security Standards "restricted"
+          # on Kubernetes 1.33. The distroless:nonroot base image uses UID 65532;
+          # explicit values here make the policy visible in the YAML.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            fsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+
+          containers:
+            - name: warmer
+              # CHANGEME: Update image reference for your registry.
+              # Examples:
+              #   ghcr.io/lostsynapse/zot-cache-warmer:latest
+              #   ghcr.io/lostsynapse/zot-cache-warmer:v1.0.0
+              #   registry.example.com/zot-cache-warmer:v1.0.0@sha256:<digest>
+              # Pinning by digest (@sha256:...) is recommended in production so
+              # a cache-warmer outage can't be caused by an upstream pull of
+              # the warmer itself.
+              image: ghcr.io/lostsynapse/zot-cache-warmer:latest
+
+              imagePullPolicy: IfNotPresent
+
+              # Container-level security context. Root filesystem is read-only
+              # because the binary never writes anything; all state lives in
+              # memory (and goroutine-local /tmp if needed).
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                capabilities:
+                  drop: ["ALL"]
+                seccompProfile:
+                  type: RuntimeDefault
+
+              # Resource limits — adjust based on cluster size.
+              # Small cluster (~25 nodes, few hundred workloads): defaults shown.
+              # Large cluster: raise memory limit to 128Mi–256Mi.
+              resources:
+                requests:
+                  memory: "32Mi"
+                  cpu: "10m"
+                limits:
+                  memory: "64Mi"
+                  cpu: "100m"
+
+              env:
+                # REQUIRED: Zot registry endpoint.
+                # Format: scheme://hostname[:port]
+                # Scheme determines HTTP vs HTTPS transport (http = insecure).
+                # Examples:
+                #   http://zot.zot.svc.cluster.local:5000
+                #   https://zot.example.com:5000
+                #   http://192.168.1.100:5000
+                - name: ZOT_REGISTRY_URL
+                  value: "http://zot.zot.svc.cluster.local:5000"
+
+                # OPTIONAL: Registry authentication.
+                # Only set if Zot's accessControl requires authenticated reads.
+                # Anonymous read of cached content works without credentials
+                # in typical pull-through configs.
+                # Always source credentials from a Secret — never inline them.
+                # - name: ZOT_USERNAME
+                #   valueFrom:
+                #     secretKeyRef:
+                #       name: zot-cache-warmer-auth
+                #       key: username
+                # - name: ZOT_PASSWORD
+                #   valueFrom:
+                #     secretKeyRef:
+                #       name: zot-cache-warmer-auth
+                #       key: password
+
+                # OPTIONAL: Skip TLS certificate verification for HTTPS Zot.
+                # Values: "true" or "false" (default: "false").
+                # Intended only for self-signed dev registries; for HTTP
+                # endpoints this has no effect — plain HTTP is implied by the
+                # ZOT_REGISTRY_URL scheme.
+                # NOT RECOMMENDED for production.
+                # - name: ZOT_INSECURE
+                #   value: "false"
+
+                # OPTIONAL: Delay in milliseconds between sequential Zot
+                # manifest requests. Prevents overwhelming Zot and upstream
+                # registries.
+                # Values: non-negative integer
+                # Default: 250
+                # Raise for larger clusters or tighter upstream rate limits.
+                - name: RATE_LIMIT_MS
+                  value: "250"
+
+                # OPTIONAL: Log verbosity.
+                # Values: debug | info | warn | error
+                # Default: info
+                # "debug" emits one line per image processed; useful for
+                # first-run verification, too chatty for steady-state.
+                - name: LOG_LEVEL
+                  value: "info"
+
+                # OPTIONAL: Overall run timeout as a Go duration string.
+                # Values: e.g. "5m", "300s", "10m"
+                # Default: "5m"
+                # Must be less than activeDeadlineSeconds above.
+                # - name: SCAN_TIMEOUT
+                #   value: "5m"
+
+                # OPTIONAL: Comma-separated namespace allowlist.
+                # Default: all namespaces scanned.
+                # When set, only these namespaces are included in the scan.
+                # Infrastructure namespaces (kube-system, etc.) should usually
+                # stay included — they host CoreDNS, Traefik, metrics-server,
+                # local-path-provisioner: exactly the images you most want
+                # cached during an outage.
+                # - name: NAMESPACE_INCLUDE
+                #   value: "production,staging"
+
+                # OPTIONAL: Comma-separated namespace blocklist.
+                # Applied after NAMESPACE_INCLUDE.
+                # Default: none.
+                # Useful for excluding ephemeral test namespaces.
+                # - name: NAMESPACE_EXCLUDE
+                #   value: "test,sandbox"
+
+              # /tmp is not strictly needed by this binary but a read-only
+              # root filesystem can trip up Go's default temp-file behavior in
+              # edge cases. A 16 MiB in-memory emptyDir is cheap insurance.
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+
+          volumes:
+            - name: tmp
+              emptyDir:
+                medium: Memory
+                sizeLimit: 16Mi
+
+          # OPTIONAL: Image pull secrets if the warmer image itself lives in
+          # a private registry. Not needed when pulling from public ghcr.io.
+          # imagePullSecrets:
+          #   - name: ghcr-credentials

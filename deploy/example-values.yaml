@@ -1,0 +1,103 @@
+---
+# Example configuration scenarios for the Zot cache warmer.
+#
+# This file is illustrative only — it is NOT deployed directly. Edit
+# deploy/cronjob.yaml with the values most appropriate for your environment.
+#
+# Each block shows the env vars for one common deployment scenario.
+
+# ----------------------------------------------------------------------------
+# Scenario 1: In-cluster Zot, anonymous read, default settings.
+# The simplest possible configuration; works when Zot is deployed in the same
+# cluster with accessControl permitting anonymous reads.
+# ----------------------------------------------------------------------------
+scenario1_minimal:
+  env:
+    - name: ZOT_REGISTRY_URL
+      value: "http://zot.zot-system.svc.cluster.local:5000"
+
+# ----------------------------------------------------------------------------
+# Scenario 2: External Zot behind TLS with a private CA.
+# Zot lives outside the cluster and presents a certificate signed by an
+# internal CA. ZOT_INSECURE is false (the default) because the CA is trusted
+# via mounted bundle (see securityContext.readOnlyRootFilesystem +
+# volumeMounts for how to mount a CA bundle if needed).
+# ----------------------------------------------------------------------------
+scenario2_external_tls:
+  env:
+    - name: ZOT_REGISTRY_URL
+      value: "https://zot.example.com:5000"
+
+# ----------------------------------------------------------------------------
+# Scenario 3: Zot with Basic auth.
+# accessControl requires authenticated reads. Credentials live in a Secret
+# named "zot-cache-warmer-auth" with keys "username" and "password".
+# Create with:
+#   kubectl -n <namespace> create secret generic zot-cache-warmer-auth \
+#     --from-literal=username=warmer \
+#     --from-literal=password='<redacted>'
+# ----------------------------------------------------------------------------
+scenario3_basic_auth:
+  env:
+    - name: ZOT_REGISTRY_URL
+      value: "https://zot.example.com:5000"
+    - name: ZOT_USERNAME
+      valueFrom:
+        secretKeyRef:
+          name: zot-cache-warmer-auth
+          key: username
+    - name: ZOT_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: zot-cache-warmer-auth
+          key: password
+
+# ----------------------------------------------------------------------------
+# Scenario 4: Large cluster, increased rate and timeout.
+# Hundreds of images means the default 250 ms delay extends a full run into
+# minutes. Raising the delay is safer for upstream rate limits; the scan
+# timeout must be extended to match.
+# ----------------------------------------------------------------------------
+scenario4_large_cluster:
+  env:
+    - name: ZOT_REGISTRY_URL
+      value: "http://zot.zot-system.svc.cluster.local:5000"
+    - name: RATE_LIMIT_MS
+      value: "500"
+    - name: SCAN_TIMEOUT
+      value: "15m"
+  # Corresponding jobTemplate.spec override:
+  activeDeadlineSeconds: 1200
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "500m"
+
+# ----------------------------------------------------------------------------
+# Scenario 5: Production-only scan.
+# Infrastructure and system namespaces are excluded to focus on application
+# images. NOTE: excluding kube-system means CoreDNS / Traefik /
+# metrics-server images will NOT be warmed; consider carefully whether this
+# is really what you want during an ISP outage.
+# ----------------------------------------------------------------------------
+scenario5_production_only:
+  env:
+    - name: ZOT_REGISTRY_URL
+      value: "http://zot.zot-system.svc.cluster.local:5000"
+    - name: NAMESPACE_INCLUDE
+      value: "production,production-db,production-cache"
+
+# ----------------------------------------------------------------------------
+# Scenario 6: Debug run.
+# Increase verbosity to one log line per image plus per-step decisions.
+# Use for first-run verification or troubleshooting; do not leave enabled.
+# ----------------------------------------------------------------------------
+scenario6_debug:
+  env:
+    - name: ZOT_REGISTRY_URL
+      value: "http://zot.zot-system.svc.cluster.local:5000"
+    - name: LOG_LEVEL
+      value: "debug"

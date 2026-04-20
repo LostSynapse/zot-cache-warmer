@@ -1,0 +1,107 @@
+---
+# ServiceAccount: identity under which the warmer CronJob pod authenticates
+# to the Kubernetes API. The projected bound token at
+# /var/run/secrets/kubernetes.io/serviceaccount/token is used by client-go's
+# rest.InClusterConfig() and rotated automatically by the kubelet.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: zot-cache-warmer
+  # CHANGEME: Target namespace for deployment.
+  # This must match the namespace of the CronJob in cronjob.yaml and the
+  # subjects[0].namespace in the ClusterRoleBinding below.
+  # Examples: zot-system, zot, infra, registry
+  namespace: zot
+  labels:
+    app.kubernetes.io/name: zot-cache-warmer
+    app.kubernetes.io/component: cache-warmer
+# Explicit even though the default is true. The projected token must be mounted
+# at /var/run/secrets/kubernetes.io/serviceaccount/ for rest.InClusterConfig()
+# to succeed.
+automountServiceAccountToken: true
+---
+# ClusterRole: minimal read-only permissions covering the seven workload kinds
+# that carry PodSpecs. Each rule is annotated with what it accesses and why.
+#
+# The built-in `view` ClusterRole would also work, but it grants ~3x more
+# access than needed (configmaps, services, ingresses, HPAs, PVCs, events,
+# pods/log, pods/status, ...). A custom role is strictly minimal and
+# auditable.
+#
+# NOT included, intentionally:
+#   * secrets      — listing leaks credentials (including imagePullSecrets)
+#   * configmaps   — frequently carry credentials in the wild
+#   * services/ingresses/pvc/... — not image sources
+#   * pods/exec, pods/log, pods/portforward — no execution or data exfil
+#   * nodes        — not image sources
+#   * all write verbs — this workload is strictly read-only
+#   * watch verb   — CronJob makes a single pass and exits; informers pointless
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: zot-cache-warmer
+  labels:
+    app.kubernetes.io/name: zot-cache-warmer
+    app.kubernetes.io/component: cache-warmer
+rules:
+  # --- core/v1 ---
+  # pods:
+  #   enumerate every running Pod cluster-wide; extract containers[].image,
+  #   initContainers[].image, and ephemeralContainers[].image. Pods reflect
+  #   runtime truth for what is actually scheduled and is the primary input.
+  # namespaces:
+  #   enumerate namespaces so NAMESPACE_INCLUDE / NAMESPACE_EXCLUDE filtering
+  #   can be validated and future per-namespace fan-out is possible.
+  - apiGroups: [""]
+    resources: ["pods", "namespaces"]
+    verbs: ["get", "list"]
+
+  # --- apps/v1 ---
+  # Scanning controllers (not just pods) catches images that have no running
+  # pod right now but WILL need to be pulled when the state changes:
+  #   * deployments       — scaled to zero, paused, or with pending rollouts
+  #   * statefulsets      — replicas: 0
+  #   * daemonsets        — pods on cordoned or tainted nodes
+  #   * replicasets       — old rollout revisions kept for rollback
+  #                         (revisionHistoryLimit default: 10)
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list"]
+
+  # --- batch/v1 ---
+  # jobs:
+  #   completed-but-not-yet-reaped Jobs still carry image refs.
+  # cronjobs:
+  #   CRITICAL. A suspended CronJob has zero pods but its image must be cached
+  #   or the next unsuspended run will cold-pull through (potentially failed)
+  #   upstream connectivity. This is the single strongest reason we scan
+  #   controllers in addition to pods.
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list"]
+---
+# ClusterRoleBinding: grants the ClusterRole above to the ServiceAccount.
+#
+# MUST be a ClusterRoleBinding, NOT a RoleBinding. The warmer calls
+# `list pods --all-namespaces` (GET /api/v1/pods). A RoleBinding referencing
+# the same ClusterRole would only grant access inside a single namespace.
+#
+# Note: roleRef is immutable on existing bindings — changing the referenced
+# ClusterRole name requires delete-and-recreate.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: zot-cache-warmer
+  labels:
+    app.kubernetes.io/name: zot-cache-warmer
+    app.kubernetes.io/component: cache-warmer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: zot-cache-warmer
+subjects:
+  - kind: ServiceAccount
+    name: zot-cache-warmer
+    # CHANGEME: Must match the ServiceAccount namespace above.
+    # Both values must be the same string.
+    namespace: zot

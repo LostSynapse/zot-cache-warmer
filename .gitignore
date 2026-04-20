@@ -1,0 +1,28 @@
+# Binaries
+zot-cache-warmer
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go
+*.test
+*.out
+vendor/
+coverage.out
+coverage.html
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
