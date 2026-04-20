@@ -6,8 +6,14 @@
 # Stage 1 runs on the host (BUILDPLATFORM) and cross-compiles for the requested
 # TARGETPLATFORM. CGO is disabled so the binary is statically linked and lands
 # cleanly in distroless/static.
+#
+# NOTE: the Go base image major.minor MUST be >= the `go` directive in go.mod.
+# When go.mod's Go version is bumped (typically by `go mod tidy` on a newer
+# local toolchain), bump this tag in lockstep. A lower base version will fail
+# inside buildx with `go mod download` exit 1 when Go's auto-toolchain
+# download path hits the network constraints of the build container.
 
-FROM --platform=$BUILDPLATFORM golang:1.24 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
 
 # buildx-provided variables. TARGETOS/TARGETARCH/TARGETVARIANT are populated
 # automatically by Docker Buildx from the --platform list.
