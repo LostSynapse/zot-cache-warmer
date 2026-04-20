@@ -139,16 +139,20 @@ func isTransient(err error) bool {
 // streamAll issues a paginated, watch-cache-served List and invokes onItem
 // once per decoded object. The pager transparently handles continue tokens
 // and restarts from scratch if the continuation token expires.
+//
+// The caller supplies a context-less list function (the closures below all
+// capture ctx from the enclosing scope). pager.SimplePageFunc adapts it to
+// the current pager.ListPageFunc signature which takes (ctx, opts).
 func streamAll(
 	ctx context.Context,
-	fn pager.ListPageFunc,
+	fn func(metav1.ListOptions) (runtime.Object, error),
 	onItem func(runtime.Object),
 ) error {
 	return retry.OnError(transientBackoff, isTransient, func() error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		p := pager.New(fn)
+		p := pager.New(pager.SimplePageFunc(fn))
 		p.PageSize = 500
 		return p.EachListItem(ctx,
 			// ResourceVersion "0" permits watch-cache serving — cheaper than
