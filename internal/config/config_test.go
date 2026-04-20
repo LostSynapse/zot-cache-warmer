@@ -204,6 +204,8 @@ func TestParseRegistryMap_WhitespaceAndEmptyEntries(t *testing.T) {
 		t.Errorf("got %v, want %v", got, want)
 	}
 }
+
+func TestSlogLevel(t *testing.T) {
 	tests := []struct {
 		level string
 		want  slog.Level
