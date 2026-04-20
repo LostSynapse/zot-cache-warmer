@@ -145,6 +145,7 @@ func run() int {
 		warmer,
 		images,
 		time.Duration(cfg.RateLimitMS)*time.Millisecond,
+		cfg.RegistryMap,
 		logger,
 	)
 
@@ -152,6 +153,7 @@ func run() int {
 		"images_total", s.Total,
 		"parsed", s.Parsed,
 		"parse_errors", s.ParseErrors,
+		"skipped_no_mapping", s.SkippedNoMapping,
 		"already_cached", s.Cached,
 		"warmed", s.Warmed,
 		"probe_errors", s.ProbeErrors,
@@ -164,24 +166,31 @@ func run() int {
 
 // stats tracks per-run outcomes for the final summary log line.
 type stats struct {
-	Total       int
-	Parsed      int
-	ParseErrors int
-	Cached      int
-	Warmed      int
-	ProbeErrors int
-	WarmErrors  int
+	Total            int
+	Parsed           int
+	ParseErrors      int
+	SkippedNoMapping int
+	Cached           int
+	Warmed           int
+	ProbeErrors      int
+	WarmErrors       int
 }
 
 // processImages iterates the discovered image set sequentially, with a
 // configurable delay between requests. Sequential (not concurrent) because
 // cache warming is a background task and overwhelming Zot or upstream
 // registries is the bigger risk than finishing slowly.
+//
+// When registryMap is non-empty, images whose registry is not a key in the
+// map are skipped (tracked in s.SkippedNoMapping) rather than sent to Zot
+// on paths that would fail. When registryMap is empty, all images are sent
+// to Zot at their bare repository path (the "flatten" layout).
 func processImages(
 	ctx context.Context,
 	w *registry.Warmer,
 	images []string,
 	delay time.Duration,
+	registryMap map[string]string,
 	logger *slog.Logger,
 ) stats {
 	var s stats
@@ -209,15 +218,34 @@ func processImages(
 		}
 		s.Parsed++
 
-		// Zot-local path. We use the parsed Repository as-is, which assumes
-		// Zot is configured without prefix rewriting in sync.registries[].content[].
-		// Deployments that use destination/stripPrefix must adapt this mapping.
+		// Determine the Zot-local path prefix for this image's registry.
+		// If a RegistryMap is configured, use it strictly: images whose
+		// registry has no mapping are skipped (their Zot URL would fail
+		// because no sync.content.destination matches). If the map is
+		// empty, fall back to the bare repository path (flatten layout).
+		var zotPath string
+		if len(registryMap) > 0 {
+			dest, ok := registryMap[p.Registry]
+			if !ok {
+				s.SkippedNoMapping++
+				logger.Warn("registry not in ZOT_REGISTRY_MAP, skipping",
+					"canonical", p.Canonical,
+					"registry", p.Registry,
+					"hint", "add this registry to ZOT_REGISTRY_MAP, Zot sync.registries, and k3s registries.yaml",
+				)
+				continue
+			}
+			zotPath = dest + "/" + p.Repository
+		} else {
+			zotPath = p.Repository
+		}
+
 		var zotRef string
 		switch {
 		case p.IsDigestOnly:
-			zotRef = p.Repository + "@" + p.Digest
+			zotRef = zotPath + "@" + p.Digest
 		default:
-			zotRef = p.Repository + ":" + p.Tag
+			zotRef = zotPath + ":" + p.Tag
 		}
 
 		logger.Debug("processing image",
@@ -231,17 +259,22 @@ func processImages(
 		probeCtx, probeCancel := context.WithTimeout(ctx, 30*time.Second)
 		_, cached, err := w.IsCached(probeCtx, zotRef)
 		probeCancel()
-		if err != nil {
+		switch {
+		case err != nil:
+			// Probe failure is ambiguous — could be Zot doing a synchronous
+			// upstream pull-through that outran the 30s budget, a network
+			// blip, or the registry being genuinely unreachable. None of
+			// those mean "skip this image"; fall through to warm, whose
+			// 10-minute context has enough runway for the pull-through
+			// latency that Zot exhibits on first cache-miss.
 			s.ProbeErrors++
-			logger.Warn("cache probe failed",
+			logger.Warn("cache probe failed, attempting warm anyway",
 				"canonical", p.Canonical,
 				"zot_ref", zotRef,
 				"error", err.Error(),
 			)
-			sleep(ctx, delay)
-			continue
-		}
-		if cached {
+			// NO continue — fall through to warm.
+		case cached:
 			s.Cached++
 			logger.Debug("cache hit", "canonical", p.Canonical, "zot_ref", zotRef)
 			sleep(ctx, delay)
@@ -249,7 +282,9 @@ func processImages(
 		}
 
 		// --- warm (GET) ---
-		// Blob-inclusive pull-through can take minutes on large images.
+		// Either probe said "not cached" (404) or probe errored — in both
+		// cases we attempt to warm. Blob-inclusive pull-through can take
+		// minutes on large images.
 		warmCtx, warmCancel := context.WithTimeout(ctx, 10*time.Minute)
 		if p.IsDigestOnly {
 			_, err = w.Warm(warmCtx, zotRef)

@@ -17,6 +17,7 @@ func withEnv(t *testing.T, vars map[string]string) {
 		"ZOT_REGISTRY_URL", "ZOT_USERNAME", "ZOT_PASSWORD", "ZOT_INSECURE",
 		"RATE_LIMIT_MS", "LOG_LEVEL", "SCAN_TIMEOUT",
 		"NAMESPACE_INCLUDE", "NAMESPACE_EXCLUDE",
+		"ZOT_REGISTRY_MAP",
 	}
 	for _, k := range knowns {
 		t.Setenv(k, "")
@@ -43,8 +44,8 @@ func TestFromEnv_MinimalValid(t *testing.T) {
 	if c.LogLevel != "info" {
 		t.Errorf("default LogLevel = %q, want info", c.LogLevel)
 	}
-	if c.ScanTimeout != 5*time.Minute {
-		t.Errorf("default ScanTimeout = %v, want 5m", c.ScanTimeout)
+	if c.ScanTimeout != 15*time.Minute {
+		t.Errorf("default ScanTimeout = %v, want 15m", c.ScanTimeout)
 	}
 	if c.ZotInsecure {
 		t.Error("default ZotInsecure should be false")
@@ -140,7 +141,69 @@ func TestFromEnv_InvalidValues(t *testing.T) {
 	}
 }
 
-func TestSlogLevel(t *testing.T) {
+func TestFromEnv_RegistryMap(t *testing.T) {
+	withEnv(t, map[string]string{
+		"ZOT_REGISTRY_URL":  "http://z",
+		"ZOT_REGISTRY_MAP": "docker.io=docker-images, ghcr.io=ghcr-images ,registry.k8s.io=k8s-images",
+	})
+	c, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	want := map[string]string{
+		"docker.io":       "docker-images",
+		"ghcr.io":         "ghcr-images",
+		"registry.k8s.io": "k8s-images",
+	}
+	if !reflect.DeepEqual(c.RegistryMap, want) {
+		t.Errorf("RegistryMap = %v, want %v", c.RegistryMap, want)
+	}
+}
+
+func TestFromEnv_RegistryMapEmpty(t *testing.T) {
+	withEnv(t, map[string]string{"ZOT_REGISTRY_URL": "http://z"})
+	c, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	if c.RegistryMap != nil {
+		t.Errorf("expected nil RegistryMap, got %v", c.RegistryMap)
+	}
+}
+
+func TestParseRegistryMap_Invalid(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+	}{
+		{"no-equals", "docker.io docker-images"},
+		{"empty-value", "docker.io="},
+		{"empty-key", "=docker-images"},
+		{"leading-slash-value", "docker.io=/docker-images"},
+		{"duplicate-key", "docker.io=a,docker.io=b"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := parseRegistryMap(tc.in); err == nil {
+				t.Errorf("expected error for %q", tc.in)
+			}
+		})
+	}
+}
+
+func TestParseRegistryMap_WhitespaceAndEmptyEntries(t *testing.T) {
+	got, err := parseRegistryMap("  docker.io = docker-images ,, ghcr.io=ghcr-images ,")
+	if err != nil {
+		t.Fatalf("parseRegistryMap: %v", err)
+	}
+	want := map[string]string{
+		"docker.io": "docker-images",
+		"ghcr.io":   "ghcr-images",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
 	tests := []struct {
 		level string
 		want  slog.Level

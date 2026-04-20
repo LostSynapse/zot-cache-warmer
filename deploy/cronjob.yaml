@@ -36,8 +36,12 @@ spec:
 
   jobTemplate:
     spec:
-      # Hard ceiling on a single run. Must be greater than SCAN_TIMEOUT env var.
-      activeDeadlineSeconds: 600
+      # Hard ceiling on a single run. Must be greater than SCAN_TIMEOUT env
+      # var. Default 1200s (20m) allows 15m scan + 5m buffer for pod startup,
+      # manifest/blob transfer on large images, and graceful shutdown.
+      # First-run warming on a large cluster may need more — bump both this
+      # and SCAN_TIMEOUT together.
+      activeDeadlineSeconds: 1200
 
       # OnFailure restart is pointless here because the app always exits 0 on
       # recoverable errors (the scheduled next run is the "retry"); it only
@@ -155,11 +159,34 @@ spec:
                   value: "info"
 
                 # OPTIONAL: Overall run timeout as a Go duration string.
-                # Values: e.g. "5m", "300s", "10m"
-                # Default: "5m"
+                # Values: e.g. "5m", "300s", "10m", "1h"
+                # Default: "15m"
                 # Must be less than activeDeadlineSeconds above.
+                # First-run on a large cluster may need 30m+ as Zot performs
+                # synchronous upstream pulls on each cache miss; subsequent
+                # runs finish in seconds once images are cached.
                 # - name: SCAN_TIMEOUT
-                #   value: "5m"
+                #   value: "15m"
+
+                # OPTIONAL BUT RECOMMENDED: Upstream-registry → Zot-local-path
+                # mapping. Format: "host1=dest1,host2=dest2,..."
+                # (values have NO leading slash).
+                #
+                # When set, the warmer routes each image through the mapped
+                # destination path in Zot. Images from registries NOT in the
+                # map are SKIPPED (visible in run-complete's
+                # skipped_no_mapping counter), preventing silent failures.
+                #
+                # When unset, the warmer sends bare repository paths
+                # (flatten layout) — only correct when Zot sync registries
+                # have NO destination set.
+                #
+                # CRITICAL: this must match exactly:
+                #   (a) destination values in Zot sync.registries[].content[]
+                #   (b) endpoint paths in /etc/rancher/k3s/registries.yaml
+                # All three surfaces must agree per upstream registry.
+                # - name: ZOT_REGISTRY_MAP
+                #   value: "docker.io=docker-images,ghcr.io=ghcr-images,registry.k8s.io=k8s-images,quay.io=quay-images,gcr.io=gcr-images,code.forgejo.org=forgejo-images,lscr.io=lscr-images"
 
                 # OPTIONAL: Comma-separated namespace allowlist.
                 # Default: all namespaces scanned.
