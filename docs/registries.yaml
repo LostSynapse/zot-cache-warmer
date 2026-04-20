@@ -1,0 +1,33 @@
+# /etc/rancher/k3s/registries.yaml
+#
+# Routes containerd mirror requests to the Zot pull-through cache.
+# Apply identically to EVERY k3s server and agent node, then restart k3s
+# on each (systemctl restart k3s / k3s-agent) for containerd to reload.
+#
+# Each `endpoint` path MUST match a `destination` in Zot's
+# extensions.sync.registries[].content[] (see infrastructure/zot/deployment.yaml)
+# AND the corresponding entry in the cache warmer's ZOT_REGISTRY_MAP env var.
+# See infrastructure/zot/README.md for the full coupling details.
+
+mirrors:
+  docker.io:
+    endpoint:
+      - https://zot.lost-synapse.com/v2/docker-images
+  ghcr.io:
+    endpoint:
+      - https://zot.lost-synapse.com/v2/ghcr-images
+  registry.k8s.io:
+    endpoint:
+      - https://zot.lost-synapse.com/v2/k8s-images
+  quay.io:
+    endpoint:
+      - https://zot.lost-synapse.com/v2/quay-images
+  gcr.io:
+    endpoint:
+      - https://zot.lost-synapse.com/v2/gcr-images
+  code.forgejo.org:
+    endpoint:
+      - https://zot.lost-synapse.com/v2/forgejo-images
+  lscr.io:
+    endpoint:
+      - https://zot.lost-synapse.com/v2/lscr-images
