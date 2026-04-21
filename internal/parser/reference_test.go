@@ -105,6 +105,32 @@ func TestParse(t *testing.T) {
 	}
 }
 
+func TestParse_DockerHubAliasesCanonicalize(t *testing.T) {
+	// All three Docker Hub hostnames designate the same registry and must
+	// produce the same Registry value so ZOT_REGISTRY_MAP lookups (keyed by
+	// canonical short name) work regardless of which alias a pod spec uses.
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"canonical-short", "docker.io/bitnami/redis:latest"},
+		{"registry-1-alias", "registry-1.docker.io/bitnami/redis:latest"},
+		{"index-alias", "index.docker.io/bitnami/redis:latest"},
+		{"bare-name-normalizes-to-docker-io", "bitnami/redis"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Parse(tc.input)
+			if err != nil {
+				t.Fatalf("Parse(%q) error: %v", tc.input, err)
+			}
+			if got.Registry != "docker.io" {
+				t.Errorf("Registry = %q, want %q", got.Registry, "docker.io")
+			}
+		})
+	}
+}
+
 func TestPreValidate(t *testing.T) {
 	tests := []struct {
 		name    string

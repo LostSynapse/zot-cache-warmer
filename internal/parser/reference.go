@@ -92,10 +92,22 @@ func Parse(raw string) (Parsed, error) {
 		named = reference.TagNameOnly(named)
 	}
 
+	// Canonicalize Docker Hub hostname aliases. distribution/reference
+	// preserves whatever domain string the caller wrote; for registry-
+	// routing purposes, "docker.io", "registry-1.docker.io", and
+	// "index.docker.io" all designate the same registry. Collapse them to
+	// the canonical short name so downstream consumers (ZOT_REGISTRY_MAP
+	// lookups, dedup by Registry) see a single identity.
+	registry := reference.Domain(named)
+	switch registry {
+	case "registry-1.docker.io", "index.docker.io":
+		registry = "docker.io"
+	}
+
 	out := Parsed{
 		Raw:        raw,
 		Canonical:  named.String(),
-		Registry:   reference.Domain(named),
+		Registry:   registry,
 		Repository: reference.Path(named),
 	}
 
