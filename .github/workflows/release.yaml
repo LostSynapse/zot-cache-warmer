@@ -106,6 +106,8 @@ jobs:
     name: Publish GitHub release
     needs: build
     runs-on: ubuntu-latest
+    # Only publish to GitHub Releases when running on GitHub (not Forgejo)
+    if: github.server_url == 'https://github.com'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
