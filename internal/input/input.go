@@ -15,6 +15,7 @@ package input
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -101,74 +102,48 @@ func isExistingFile(path string) bool {
 	return st.Mode().IsRegular()
 }
 
-// imageFieldRE matches `image:` and `Image:` fields in YAML/JSON. Captures
-// the value (quoted or unquoted, single or double quotes). Tolerates leading
-// whitespace and list-item dashes. Does NOT match `imagePullPolicy:` because
-// the key is anchored to `image` followed by optional whitespace then `:`,
-// and `imagePullPolicy` is a different key.
+// imageFieldRE matches a YAML `image:` or `Image:` field on its own line.
+// Captures the value (quoted or unquoted). Tolerates leading whitespace and
+// list-item dashes. Does NOT match `imagePullPolicy:` because the key is
+// anchored to `image` followed by optional whitespace then `:`.
 //
-// Key anchoring uses `\bimage\b` semantics via explicit character class
-// boundaries: the key is `image` or `"image"` with nothing before it except
-// whitespace, a dash (YAML list item), or a quote. This prevents matching
-// keys like `imagePullPolicy` whose prefix happens to contain "image".
+// Anchored to start-of-line only; the trailing character class stops at
+// natural YAML terminators (whitespace, newline, quote).
 var imageFieldRE = regexp.MustCompile(
-	`(?mi)^[ \t]*(?:-[ \t]+)?"?image"?[ \t]*:[ \t]*["']?([^"'\s,}{\[\]]+)["']?[ \t]*$`,
+	`(?mi)^[ \t]*(?:-[ \t]+)?"?image"?[ \t]*:[ \t]*["']?([^"'\s,}{\[\]]+)["']?`,
 )
 
-// structuredInputRE detects whether an input looks structured (YAML/JSON).
-// If any line matches an `image:` field or begins with `---` / `{` / `[`,
-// we treat the whole input as structured and ONLY extract from `image:`
-// fields. Otherwise we treat it as line-delimited plain text.
-var structuredInputRE = regexp.MustCompile(
-	`(?mi)^[ \t]*(?:[-"]?image"?[ \t]*:|---|\{|\[)`,
-)
-
-// parseReader extracts image references from r. The input is classified as
-// either structured (YAML/JSON) or plain-text, and only one extraction path
-// runs. This avoids false positives where structured-file keys like
-// `apiVersion: apps/v1` would be misread as image references in a greedy
-// fallback path.
+// parseReader extracts image references from r. The input is classified by
+// its first non-blank byte and dispatched to exactly one parser:
 //
-//   - Structured input: only lines matching `image:` (case-insensitive, with
-//     optional YAML list-item dash and quotes) are consumed.
-//   - Plain text: every non-blank, non-comment line that looks like an image
-//     reference is consumed.
+//   - Starts with `{` or `[`: parsed as JSON; every `image` key's string
+//     value across the entire document is collected.
+//   - Contains `image:` (per line) or starts with `---`: treated as YAML;
+//     the `image:` field regex runs over every line.
+//   - Otherwise: treated as plain text; every non-blank, non-comment line
+//     is checked with looksLikeImageRef.
 //
-// Lines starting with # are treated as comments and skipped. Blank lines are
-// ignored. Returns deduplicated, sorted output.
+// Lines starting with # are treated as comments in plain-text mode. Blank
+// lines are ignored. Returns deduplicated, sorted output.
 func parseReader(r io.Reader) ([]string, error) {
-	// Buffer the entire input so we can make a mode decision before parsing.
-	// Inputs are kubernetes manifests or images.txt lists — tens of KB at
-	// most — so full buffering is fine. The 4 MiB cap protects against a
-	// pathological caller piping gigabytes.
+	// Buffer the input once. Kubernetes manifests and images.txt files are
+	// tens of KB at most; the 4 MiB cap protects against pathological input.
 	buf, err := io.ReadAll(io.LimitReader(r, 4*1024*1024))
 	if err != nil {
 		return nil, err
 	}
 
 	seen := make(map[string]struct{})
-	structured := structuredInputRE.Match(buf)
 
-	if structured {
-		for _, match := range imageFieldRE.FindAllStringSubmatch(string(buf), -1) {
-			ref := strings.TrimSpace(match[1])
-			if ref != "" && looksLikeImageRef(ref) {
-				seen[ref] = struct{}{}
-			}
+	switch detectMode(buf) {
+	case modeJSON:
+		if err := extractFromJSON(buf, seen); err != nil {
+			return nil, err
 		}
-	} else {
-		scanner := bufio.NewScanner(strings.NewReader(string(buf)))
-		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line == "" || strings.HasPrefix(line, "#") {
-				continue
-			}
-			if looksLikeImageRef(line) {
-				seen[line] = struct{}{}
-			}
-		}
-		if err := scanner.Err(); err != nil {
+	case modeYAML:
+		extractFromYAML(buf, seen)
+	case modePlainText:
+		if err := extractFromPlainText(buf, seen); err != nil {
 			return nil, err
 		}
 	}
@@ -179,6 +154,108 @@ func parseReader(r io.Reader) ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+type inputMode int
+
+const (
+	modePlainText inputMode = iota
+	modeYAML
+	modeJSON
+)
+
+// detectMode classifies input by the first non-blank byte and a quick scan
+// for YAML markers. Priority:
+//
+//  1. First non-blank byte is `{` or `[` → JSON
+//  2. Input contains `image:` or `---` → YAML
+//  3. Otherwise → plain text
+//
+// Mutually exclusive dispatch prevents the old greedy-fallback bug where
+// YAML scalar lines (`apiVersion: apps/v1`) were scooped up as image refs.
+func detectMode(buf []byte) inputMode {
+	for _, b := range buf {
+		switch b {
+		case ' ', '\t', '\r', '\n':
+			continue
+		case '{', '[':
+			return modeJSON
+		default:
+			goto notJSON
+		}
+	}
+notJSON:
+	if yamlMarkerRE.Match(buf) {
+		return modeYAML
+	}
+	return modePlainText
+}
+
+// yamlMarkerRE detects YAML by the presence of an `image:` key on its own
+// line or a `---` document separator. An `image:` on some line is a very
+// strong YAML signal that distinguishes it from plain text.
+var yamlMarkerRE = regexp.MustCompile(`(?mi)^[ \t]*(?:-[ \t]+)?"?image"?[ \t]*:|^---`)
+
+// extractFromJSON walks the parsed document recursively, collecting every
+// string value under a key named "image" (case-insensitive).
+func extractFromJSON(buf []byte, seen map[string]struct{}) error {
+	var doc any
+	if err := json.Unmarshal(buf, &doc); err != nil {
+		return fmt.Errorf("parse JSON: %w", err)
+	}
+	walkJSON(doc, seen)
+	return nil
+}
+
+func walkJSON(v any, seen map[string]struct{}) {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, val := range x {
+			if strings.EqualFold(k, "image") {
+				if s, ok := val.(string); ok {
+					s = strings.TrimSpace(s)
+					if s != "" && looksLikeImageRef(s) {
+						seen[s] = struct{}{}
+					}
+				}
+			}
+			walkJSON(val, seen)
+		}
+	case []any:
+		for _, item := range x {
+			walkJSON(item, seen)
+		}
+	}
+}
+
+// extractFromYAML runs the image-field regex over every line of the input.
+// YAML's line-oriented structure makes this reliable: keys appear at the
+// start of a line (after optional whitespace and list-item dashes), and
+// values end at whitespace/newline/quote.
+func extractFromYAML(buf []byte, seen map[string]struct{}) {
+	for _, match := range imageFieldRE.FindAllSubmatch(buf, -1) {
+		ref := strings.TrimSpace(string(match[1]))
+		if ref != "" && looksLikeImageRef(ref) {
+			seen[ref] = struct{}{}
+		}
+	}
+}
+
+// extractFromPlainText treats every non-blank, non-comment line as a
+// candidate image reference.
+func extractFromPlainText(buf []byte, seen map[string]struct{}) error {
+	scanner := bufio.NewScanner(strings.NewReader(string(buf)))
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if looksLikeImageRef(line) {
+			seen[line] = struct{}{}
+		}
+	}
+	return scanner.Err()
 }
 
 // looksLikeImageRef is a cheap pre-filter to reject obvious non-references
