@@ -1,5 +1,7 @@
-# Binaries
-zot-cache-warmer
+# Binaries — anchored to repo root only; do NOT ignore cmd/zot-cache-warmer/
+# which is a Go package directory, not a binary.
+/zot-cache-warmer
+/zot-warm
 *.exe
 *.dll
 *.so
