@@ -104,53 +104,73 @@ func isExistingFile(path string) bool {
 // imageFieldRE matches `image:` and `Image:` fields in YAML/JSON. Captures
 // the value (quoted or unquoted, single or double quotes). Tolerates leading
 // whitespace and list-item dashes. Does NOT match `imagePullPolicy:` because
-// the colon must be immediately followed by whitespace or end-of-line, not
-// other letters.
-var imageFieldRE = regexp.MustCompile(`(?mi)^\s*-?\s*"?image"?\s*:\s*["']?([^"'\s,}{\[\]]+)["']?\s*$`)
+// the key is anchored to `image` followed by optional whitespace then `:`,
+// and `imagePullPolicy` is a different key.
+//
+// Key anchoring uses `\bimage\b` semantics via explicit character class
+// boundaries: the key is `image` or `"image"` with nothing before it except
+// whitespace, a dash (YAML list item), or a quote. This prevents matching
+// keys like `imagePullPolicy` whose prefix happens to contain "image".
+var imageFieldRE = regexp.MustCompile(
+	`(?mi)^[ \t]*(?:-[ \t]+)?"?image"?[ \t]*:[ \t]*["']?([^"'\s,}{\[\]]+)["']?[ \t]*$`,
+)
 
-// parseReader extracts image references from r. The input can be:
-//   - one image per line (plain text)
-//   - YAML (with `image: foo:bar` fields)
-//   - JSON (with `"image": "foo:bar"` fields)
+// structuredInputRE detects whether an input looks structured (YAML/JSON).
+// If any line matches an `image:` field or begins with `---` / `{` / `[`,
+// we treat the whole input as structured and ONLY extract from `image:`
+// fields. Otherwise we treat it as line-delimited plain text.
+var structuredInputRE = regexp.MustCompile(
+	`(?mi)^[ \t]*(?:[-"]?image"?[ \t]*:|---|\{|\[)`,
+)
+
+// parseReader extracts image references from r. The input is classified as
+// either structured (YAML/JSON) or plain-text, and only one extraction path
+// runs. This avoids false positives where structured-file keys like
+// `apiVersion: apps/v1` would be misread as image references in a greedy
+// fallback path.
+//
+//   - Structured input: only lines matching `image:` (case-insensitive, with
+//     optional YAML list-item dash and quotes) are consumed.
+//   - Plain text: every non-blank, non-comment line that looks like an image
+//     reference is consumed.
 //
 // Lines starting with # are treated as comments and skipped. Blank lines are
-// ignored. The function attempts both modes simultaneously: it scans each
-// line, treating lines that look like image refs as such, and falling back
-// to regex-extraction of `image:` fields for everything else.
-//
-// Returns deduplicated, sorted output.
+// ignored. Returns deduplicated, sorted output.
 func parseReader(r io.Reader) ([]string, error) {
+	// Buffer the entire input so we can make a mode decision before parsing.
+	// Inputs are kubernetes manifests or images.txt lists — tens of KB at
+	// most — so full buffering is fine. The 4 MiB cap protects against a
+	// pathological caller piping gigabytes.
+	buf, err := io.ReadAll(io.LimitReader(r, 4*1024*1024))
+	if err != nil {
+		return nil, err
+	}
+
 	seen := make(map[string]struct{})
-	scanner := bufio.NewScanner(r)
-	// Allow longer lines than bufio's default 64KB — Helm-rendered manifests
-	// occasionally have long fields.
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	structured := structuredInputRE.Match(buf)
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
-
-		// Comment line.
-		if strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-
-		// YAML/JSON image: field.
-		if matches := imageFieldRE.FindStringSubmatch(line); matches != nil {
-			ref := strings.TrimSpace(matches[1])
+	if structured {
+		for _, match := range imageFieldRE.FindAllStringSubmatch(string(buf), -1) {
+			ref := strings.TrimSpace(match[1])
 			if ref != "" && looksLikeImageRef(ref) {
 				seen[ref] = struct{}{}
-				continue
 			}
 		}
-
-		// Plain-text image-per-line. Bare line, must look like a ref.
-		if trimmed != "" && looksLikeImageRef(trimmed) {
-			seen[trimmed] = struct{}{}
+	} else {
+		scanner := bufio.NewScanner(strings.NewReader(string(buf)))
+		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			if looksLikeImageRef(line) {
+				seen[line] = struct{}{}
+			}
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
+		if err := scanner.Err(); err != nil {
+			return nil, err
+		}
 	}
 
 	out := make([]string, 0, len(seen))

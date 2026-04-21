@@ -137,6 +137,36 @@ alpine:3.20
 	}
 }
 
+// TestParseReader_DoesNotEatYAMLKeysAsImages is a regression test for the
+// greedy-fallback bug where YAML scalar lines like "apiVersion: apps/v1" or
+// "kind: Deployment" were being scooped up as image references because they
+// contain a colon. The fix: when the input is detected as structured
+// (YAML/JSON), only the `image:` field regex runs — there is no bare-line
+// fallback. This test fails LOUDLY if anyone ever reintroduces a fallback.
+func TestParseReader_DoesNotEatYAMLKeysAsImages(t *testing.T) {
+	yaml := `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo
+  namespace: default
+spec:
+  template:
+    spec:
+      serviceAccountName: my-sa
+      containers:
+        - name: app
+          image: nginx:1.25
+`
+	got, err := parseReader(strings.NewReader(yaml))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	want := []string{"nginx:1.25"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v — YAML scalar lines must not be treated as images", got, want)
+	}
+}
+
 func TestParseReader_IgnoresPullPolicy(t *testing.T) {
 	yaml := `containers:
   - name: app
