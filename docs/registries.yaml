@@ -8,26 +8,55 @@
 # extensions.sync.registries[].content[] (see infrastructure/zot/deployment.yaml)
 # AND the corresponding entry in the cache warmer's ZOT_REGISTRY_MAP env var.
 # See infrastructure/zot/README.md for the full coupling details.
+#
+# Hostname aliases: Docker Hub is reachable via three hostnames and the
+# Kubernetes registry via two (the old k8s.gcr.io redirects to the current
+# registry.k8s.io). All aliases for a given upstream point at the SAME Zot
+# destination path so charts using any form route through the cache.
 
 mirrors:
+  # --- Docker Hub (3 aliases → /docker-images) ---
   docker.io:
     endpoint:
       - https://zot.lost-synapse.com/v2/docker-images
+  registry-1.docker.io:
+    endpoint:
+      - https://zot.lost-synapse.com/v2/docker-images
+  index.docker.io:
+    endpoint:
+      - https://zot.lost-synapse.com/v2/docker-images
+
+  # --- GitHub Container Registry ---
   ghcr.io:
     endpoint:
       - https://zot.lost-synapse.com/v2/ghcr-images
+
+  # --- Kubernetes registry (2 aliases → /k8s-images) ---
+  # k8s.gcr.io is deprecated but still appears in older chart manifests;
+  # it redirects upstream to registry.k8s.io, so they share one cache path.
   registry.k8s.io:
     endpoint:
       - https://zot.lost-synapse.com/v2/k8s-images
+  k8s.gcr.io:
+    endpoint:
+      - https://zot.lost-synapse.com/v2/k8s-images
+
+  # --- Quay ---
   quay.io:
     endpoint:
       - https://zot.lost-synapse.com/v2/quay-images
+
+  # --- Google Container Registry ---
   gcr.io:
     endpoint:
       - https://zot.lost-synapse.com/v2/gcr-images
+
+  # --- Forgejo ---
   code.forgejo.org:
     endpoint:
       - https://zot.lost-synapse.com/v2/forgejo-images
+
+  # --- LinuxServer ---
   lscr.io:
     endpoint:
       - https://zot.lost-synapse.com/v2/lscr-images

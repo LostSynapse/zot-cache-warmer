@@ -12,6 +12,10 @@
 # local toolchain), bump this tag in lockstep. A lower base version will fail
 # inside buildx with `go mod download` exit 1 when Go's auto-toolchain
 # download path hits the network constraints of the build container.
+#
+# This image ships ONLY the cluster CronJob binary (cmd/zot-cache-warmer).
+# The standalone CLI (cmd/zot-warm) is published separately as a release
+# binary — see .github/workflows/release.yaml.
 
 FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
 
@@ -32,12 +36,15 @@ RUN go mod download
 COPY . .
 
 # Strip symbols (-s -w) for a smaller binary; embed Version via ldflags.
+# Build path targets the cluster binary explicitly. The standalone CLI at
+# cmd/zot-warm is not compiled into this image — it is published as a
+# standalone release artifact from a separate workflow job.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOARM=${TARGETVARIANT#v} \
     go build \
         -trimpath \
         -ldflags="-s -w -X main.Version=${VERSION}" \
         -o /out/zot-cache-warmer \
-        .
+        ./cmd/zot-cache-warmer
 
 # Stage 2: distroless static ships CA certificates at
 # /etc/ssl/certs/ca-certificates.crt, which Go's x509.SystemCertPool() reads

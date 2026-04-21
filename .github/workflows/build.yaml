@@ -44,8 +44,11 @@ jobs:
       - name: Test
         run: go test -race -coverprofile=coverage.out ./...
 
-      - name: Build (sanity check, native arch)
-        run: go build -v ./...
+      - name: Build zot-cache-warmer (sanity check, native arch)
+        run: go build -v ./cmd/zot-cache-warmer
+
+      - name: Build zot-warm (sanity check, native arch)
+        run: go build -v ./cmd/zot-warm
 
   build-and-push:
     name: Build and push multi-arch image

@@ -1,0 +1,62 @@
+#!/usr/bin/env sh
+# zot-warm — arch-detecting wrapper for the standalone CLI.
+#
+# Detects the current architecture and execs the matching bundled binary.
+# Distributed inside the universal archive so consumers can invoke
+# `./zot-warm ...` regardless of whether they're on amd64 or arm64.
+#
+# Installation (after extracting the universal tarball):
+#   sudo cp zot-warm/zot-warm /usr/local/bin/
+#   sudo cp zot-warm/zot-warm-linux-* /usr/local/bin/
+# or use install.sh from the same directory.
+#
+# The script looks for the binaries in these locations, in order:
+#   1. $ZOT_WARM_BIN_DIR (if set)
+#   2. directory containing this script (universal archive layout)
+#   3. /usr/local/lib/zot-warm (system install)
+#   4. $PATH (single-binary install)
+#
+# Exit code 127 = architecture not supported or binary not found.
+
+set -eu
+
+arch_from_uname() {
+    # Map uname -m output to Go's GOARCH naming. Only linux is shipped, so
+    # other OSes fall through to an explicit error.
+    case "$(uname -m)" in
+        x86_64|amd64)        echo "amd64" ;;
+        aarch64|arm64)       echo "arm64" ;;
+        *)                   return 1 ;;
+    esac
+}
+
+die() {
+    printf 'zot-warm: %s\n' "$*" >&2
+    exit 127
+}
+
+arch=$(arch_from_uname) || die "unsupported architecture: $(uname -m)"
+os=$(uname -s | tr '[:upper:]' '[:lower:]')
+if [ "$os" != "linux" ]; then
+    die "unsupported OS: $os (only linux is shipped)"
+fi
+
+bin_name="zot-warm-${os}-${arch}"
+
+# Search path for the arch-specific binary.
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+search_dirs="${ZOT_WARM_BIN_DIR:-} ${script_dir} /usr/local/lib/zot-warm"
+
+for dir in $search_dirs; do
+    [ -z "$dir" ] && continue
+    if [ -x "${dir}/${bin_name}" ]; then
+        exec "${dir}/${bin_name}" "$@"
+    fi
+done
+
+# Final fallback: consult $PATH for the arch-specific binary directly.
+if command -v "$bin_name" >/dev/null 2>&1; then
+    exec "$bin_name" "$@"
+fi
+
+die "could not locate ${bin_name}; searched: ${search_dirs} and \$PATH"

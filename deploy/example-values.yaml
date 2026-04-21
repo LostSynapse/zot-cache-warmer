@@ -101,3 +101,28 @@ scenario6_debug:
       value: "http://zot.zot-system.svc.cluster.local:5000"
     - name: LOG_LEVEL
       value: "debug"
+
+# ----------------------------------------------------------------------------
+# Scenario 7: Destination-namespaced layout (RECOMMENDED for production).
+# Each upstream registry is mapped to its own path prefix in Zot via
+# sync.registries[].content[].destination. The warmer must mirror that
+# mapping in ZOT_REGISTRY_MAP, and the same paths must appear as endpoint
+# routes in /etc/rancher/k3s/registries.yaml on every node.
+#
+# This avoids path collisions between upstreams (e.g., "library/nginx"
+# colliding between docker.io and another registry that mirrors it) and
+# gives operators a clear per-upstream namespace in Zot's storage.
+#
+# Images from registries NOT in the map are skipped with a warning,
+# preventing silent failures when a new workload introduces an upstream
+# the operator hasn't configured.
+# ----------------------------------------------------------------------------
+scenario7_destination_namespaced:
+  env:
+    - name: ZOT_REGISTRY_URL
+      value: "http://zot.zot-system.svc.cluster.local:5000"
+    - name: ZOT_REGISTRY_MAP
+      # Format: "host=destination,host=destination,..." (no leading slash on values)
+      # Each entry must match the corresponding sync.registries[].content[].destination
+      # in the Zot ConfigMap AND the endpoint suffix in the node's registries.yaml.
+      value: "docker.io=docker-images,ghcr.io=ghcr-images,registry.k8s.io=k8s-images,quay.io=quay-images,gcr.io=gcr-images"
