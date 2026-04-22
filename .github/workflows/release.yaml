@@ -20,7 +20,6 @@
 
 name: release
 
-enable-email-notifications: true
 # Publishes the standalone zot-warm CLI binaries to GitHub Releases on every
 # semver tag. Intentionally separate from the container image build so the two
 # release cadences can diverge: image builds run on every main push, binary
@@ -167,6 +166,7 @@ jobs:
         with:
           direction: upload
           release-dir: dist/
+          token: ${{ secrets.GITHUB_TOKEN }}
           tag: ${{ needs.build.outputs.version }}
           release-notes: |
             Release ${{ needs.build.outputs.version }}
