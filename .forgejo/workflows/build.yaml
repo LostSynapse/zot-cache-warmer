@@ -17,8 +17,6 @@
 #
 name: build
 
-enable-email-notifications: true
-
 on:
   push:
     branches:
@@ -29,6 +27,8 @@ on:
     branches:
       - main
   workflow_dispatch:
+
+enable-email-notifications: true
 
 env:
   # Auto-detect platform and set registry accordingly

@@ -35,6 +35,8 @@ on:
         description: 'Tag to release (for manual dispatch, e.g. v0.1.0)'
         required: true
 
+enable-email-notifications: true
+
 permissions:
   contents: write  # required to create the release and upload assets
 
