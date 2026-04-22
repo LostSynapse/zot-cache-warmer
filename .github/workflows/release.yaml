@@ -1,9 +1,10 @@
-name: release
-
-# Publishes the standalone zot-warm CLI binaries to GitHub Releases on every
-# semver tag. Intentionally separate from the container image build so the two
-# release cadences can diverge: image builds run on every main push, binary
-# releases only on tags.
+# Dual-Platform Release Workflow
+#
+# Publishes the standalone zot-warm CLI binaries to releases on both GitHub
+# and Forgejo. The build job runs on both platforms, then platform-specific
+# publish jobs handle uploading to the appropriate release system.
+#
+# Platform detection: GitHub when github.server_url == 'https://github.com'
 #
 # Artifacts uploaded per tag:
 #   zot-warm-linux-amd64           — single binary, Intel/AMD 64-bit Linux
@@ -16,6 +17,13 @@ name: release
 # installs the matching binary. Consumers who know their arch can grab the
 # single-arch binary directly; consumers who want one thing to curl grab
 # the universal archive.
+
+name: release
+
+# Publishes the standalone zot-warm CLI binaries to GitHub Releases on every
+# semver tag. Intentionally separate from the container image build so the two
+# release cadences can diverge: image builds run on every main push, binary
+# releases only on tags.
 
 on:
   push:
@@ -102,11 +110,10 @@ jobs:
           path: dist/
           retention-days: 7
 
-  publish:
+  publish-github:
     name: Publish GitHub release
     needs: build
     runs-on: ubuntu-latest
-    # Only publish to GitHub Releases when running on GitHub (not Forgejo)
     if: github.server_url == 'https://github.com'
     steps:
       - name: Checkout
@@ -129,3 +136,33 @@ jobs:
             dist/zot-warm-linux-arm64
             dist/zot-warm-linux-universal.tar.gz
             dist/SHA256SUMS
+
+  publish-forgejo:
+    name: Publish Forgejo release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.server_url != 'https://github.com'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: release-binaries
+          path: dist/
+
+      - name: Create or update release
+        uses: https://code.forgejo.org/actions/forgejo-release@v2
+        with:
+          direction: upload
+          release-dir: dist/
+          tag: ${{ needs.build.outputs.version }}
+          release-notes: |
+            Release ${{ needs.build.outputs.version }}
+            
+            ## Assets
+            - `zot-warm-linux-amd64` - Single binary for Intel/AMD 64-bit Linux
+            - `zot-warm-linux-arm64` - Single binary for ARM 64-bit Linux  
+            - `zot-warm-linux-universal.tar.gz` - Universal archive with both binaries + installer
+            - `SHA256SUMS` - Checksums for verification
