@@ -2,16 +2,18 @@
 # 
 # This workflow runs on both GitHub Actions and Forgejo Actions, automatically
 # detecting the platform and pushing to the appropriate container registry:
-#   - GitHub: pushes to ghcr.io using GITHUB_TOKEN (automatic)
-#   - Forgejo: pushes to zot.lost-synapse.com using custom secrets
+#   - GitHub: pushes to ghcr.io
+#   - Forgejo: pushes to zot.lost-synapse.com
 #
-# Required Forgejo Repository Secrets:
-#   REGISTRY_USERNAME: Username for Zot registry authentication
-#   REGISTRY_PASSWORD: Password/token for Zot registry authentication
+# Required Repository Secrets (BOTH platforms):
+#   REGISTRY_USERNAME: Container registry username
+#   REGISTRY_PASSWORD: Container registry password/token
 #
-# Platform detection uses github.server_url:
-#   - Contains 'github.com' → GitHub Actions
-#   - Otherwise → Forgejo Actions
+# GitHub: Create a Personal Access Token (classic or fine-grained) with
+#         packages:write permission, add as secrets to the repository
+# Forgejo: Use Zot registry credentials
+#
+# Platform detection uses github.server_url to set the registry URL.
 #
 name: build
 
@@ -89,9 +91,8 @@ jobs:
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
-          # GitHub: use actor + GITHUB_TOKEN, Forgejo: use custom secrets
-          username: ${{ contains(github.server_url, 'github.com') && github.actor || secrets.REGISTRY_USERNAME }}
-          password: ${{ contains(github.server_url, 'github.com') && secrets.GITHUB_TOKEN || secrets.REGISTRY_PASSWORD }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
 
       - name: Extract image metadata
         id: meta
