@@ -1,3 +1,18 @@
+# Dual-Platform Build Workflow
+# 
+# This workflow runs on both GitHub Actions and Forgejo Actions, automatically
+# detecting the platform and pushing to the appropriate container registry:
+#   - GitHub: pushes to ghcr.io using GITHUB_TOKEN (automatic)
+#   - Forgejo: pushes to zot.lost-synapse.com using custom secrets
+#
+# Required Forgejo Repository Secrets:
+#   REGISTRY_USERNAME: Username for Zot registry authentication
+#   REGISTRY_PASSWORD: Password/token for Zot registry authentication
+#
+# Platform detection uses github.server_url:
+#   - Contains 'github.com' → GitHub Actions
+#   - Otherwise → Forgejo Actions
+#
 name: build
 
 on:
@@ -12,8 +27,11 @@ on:
   workflow_dispatch:
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # Auto-detect platform and set registry accordingly
+  # GitHub: ghcr.io, Forgejo: zot.lost-synapse.com
+  REGISTRY: ${{ contains(github.server_url, 'github.com') && 'ghcr.io' || 'zot.lost-synapse.com' }}
+  # GitHub: full repo path (owner/repo), Forgejo: just repo name
+  IMAGE_NAME: ${{ contains(github.server_url, 'github.com') && github.repository || github.event.repository.name }}
 
 permissions:
   contents: read
@@ -67,14 +85,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      # Only log in to GHCR when running on GitHub (not Forgejo)
-      - name: Log in to GitHub Container Registry
-        if: github.server_url == 'https://github.com'
+      - name: Log in to Container Registry
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # GitHub: use actor + GITHUB_TOKEN, Forgejo: use custom secrets
+          username: ${{ contains(github.server_url, 'github.com') && github.actor || secrets.REGISTRY_USERNAME }}
+          password: ${{ contains(github.server_url, 'github.com') && secrets.GITHUB_TOKEN || secrets.REGISTRY_PASSWORD }}
 
       - name: Extract image metadata
         id: meta
@@ -94,8 +111,7 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          # Only push to GHCR when running on GitHub (Forgejo does build-only validation)
-          push: ${{ github.server_url == 'https://github.com' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
