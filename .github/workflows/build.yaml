@@ -30,8 +30,8 @@ on:
 
 env:
   # Auto-detect platform and set registry accordingly
-  # GitHub: ghcr.io, Forgejo: zot.lost-synapse.com
-  REGISTRY: ${{ contains(github.server_url, 'github.com') && 'ghcr.io' || 'zot.lost-synapse.com' }}
+  # GitHub: ghcr.io, Forgejo: git.lost-synapse.com
+  REGISTRY: ${{ contains(github.server_url, 'github.com') && 'ghcr.io' || 'git.lost-synapse.com' }}
   # GitHub: full repo path (owner/repo), Forgejo: just repo name
   IMAGE_NAME: ${{ contains(github.server_url, 'github.com') && github.repository || github.event.repository.name }}
 
