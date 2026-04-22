@@ -1,4 +1,4 @@
-# Dual-Platform Build Workflow - now split GITHUB
+# Dual-Platform Build Workflow - now split FORGEJO
 # 
 # This workflow runs on both GitHub Actions and Forgejo Actions, automatically
 # detecting the platform and pushing to the appropriate container registry:
