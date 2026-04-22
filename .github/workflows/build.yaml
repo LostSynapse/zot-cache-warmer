@@ -32,8 +32,8 @@ env:
   # Auto-detect platform and set registry accordingly
   # GitHub: ghcr.io, Forgejo: git.lost-synapse.com
   REGISTRY: ${{ contains(github.server_url, 'github.com') && 'ghcr.io' || 'git.lost-synapse.com' }}
-  # GitHub: full repo path (owner/repo), Forgejo: just repo name
-  IMAGE_NAME: ${{ contains(github.server_url, 'github.com') && github.repository || github.event.repository.name }}
+  # Both platforms need full owner/repo path
+  IMAGE_NAME: ${{ github.repository }}
 
 permissions:
   contents: read
