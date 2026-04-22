@@ -166,7 +166,7 @@ jobs:
         with:
           direction: upload
           release-dir: dist/
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.REGISTRY_PASSWORD }}
           tag: ${{ needs.build.outputs.version }}
           release-notes: |
             Release ${{ needs.build.outputs.version }}
